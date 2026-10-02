@@ -1,0 +1,45 @@
+name: Auto-merge Dependabot
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# `pull_request_target` runs from the base commit, so untrusted PR code never
+# executes here; this job only reads PR metadata and calls the merge API.
+# `contents: write` is needed solely to set the auto-merge flag.
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  auto-merge:
+    name: Enable auto-merge
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Fetch Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      # Auto-merge is the gate: GitHub merges only once every required check on the
+      # current HEAD is green, so a failing `Tests` run leaves the PR open. Major
+      # bumps wait for a human because the triage pipeline depends on laya and
+      # transformers output behaviour.
+      - name: Enable auto-merge when not a major bump
+        if: steps.meta.outputs.update_type != 'major'
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+          PR_URL: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
+      - name: Note skipped major bump
+        if: steps.meta.outputs.update_type == 'major'
+        run: echo "Semver-major bump, auto-merge skipped; manual review required."

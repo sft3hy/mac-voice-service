@@ -1,0 +1,43 @@
+services:
+  voice:
+    build: .
+    image: mac-voice-service:latest
+    restart: unless-stopped
+    # One worker only: the model is loaded once and shared by every request.
+    environment:
+      MODEL_DIR: /models/Kokoro-82M
+      DEFAULT_VOICE: ${DEFAULT_VOICE:-af_heart}
+      MP3_BITRATE: ${MP3_BITRATE:-128k}
+    volumes:
+      # Weights stay on the host so restarts never re-download anything.
+      - ./models:/models:ro
+    ports:
+      # Bind 0.0.0.0 so Tailscale can reach the phone-facing port.
+      - "8000:8000"
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 70s
+      retries: 3
+
+  # Optional: uncomment to expose the service over Tailscale from a container
+  # instead of the macOS Tailscale app. Needs /dev/net/tun, which OrbStack
+  # can grant; if it cannot, run Tailscale on the Mac host and drop this block.
+  # tailscale:
+  #   image: tailscale/tailscale:latest
+  #   hostname: mac-voice
+  #   environment:
+  #     TS_AUTHKEY: ${TS_AUTHKEY:?set in .env}
+  #     TS_STATE_DIR: /var/lib/tailscale
+  #   devices:
+  #     - /dev/net/tun
+  #   cap_add: [NET_ADMIN]
+  #   restart: unless-stopped
+  #   volumes:
+  #     - tailscale-data:/var/lib/tailscale
+
+# volumes:
+#   tailscale-data:

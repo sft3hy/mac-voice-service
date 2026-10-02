@@ -1,0 +1,6 @@
+kokoro==0.9.4
+transformers>=4.40
+numpy
+soundfile
+fastapi
+uvicorn[standard]

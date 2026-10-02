@@ -1,0 +1,17 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Model weights (~356MB) — download with `make models` / scripts/fetch_models.sh,
+# do not commit. Kept on the host and mounted read-only into the container.
+models/
+
+# Audio output & scratch
+out/
+*.mp3
+.agent_tmp/
+
+# Secrets
+.env

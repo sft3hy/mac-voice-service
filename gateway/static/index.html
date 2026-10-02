@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f14">
+<title>Voice</title>
+<link rel="icon" href="/static/favicon.svg">
+<link rel="apple-touch-icon" href="/static/favicon.svg">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    background: #0b0f14; color: #e8edf2; font: 17px/1.5 -apple-system, system-ui, sans-serif;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header { padding: 18px 16px 8px; font-weight: 600; letter-spacing: .3px; }
+  #status { padding: 0 16px 10px; font-size: 14px; color: #8fa3b8; min-height: 20px; }
+  textarea {
+    flex: 1; margin: 0 16px; padding: 14px; resize: none; border-radius: 14px;
+    border: 1px solid #26313d; background: #121a23; color: #e8edf2; font: inherit; min-height: 190px;
+  }
+  textarea:focus { outline: none; border-color: #3d8bfd; }
+  .row { display: flex; gap: 10px; padding: 12px 16px calc(18px + env(safe-area-inset-bottom)); }
+  select, button { font: inherit; border-radius: 12px; padding: 13px 14px; }
+  select { flex: 1; background: #121a23; color: #e8edf2; border: 1px solid #26313d; min-width: 0; }
+  button { border: 0; background: #2f81f7; color: #fff; font-weight: 600; }
+  button.stop { background: #b42318; }
+  button:disabled { opacity: .45; }
+</style>
+</head>
+<body>
+<header>Read to me</header>
+<div id="status">loading voices…</div>
+<textarea id="text" placeholder="Paste or type anything, then tap Read." autocapitalize="sentences"></textarea>
+<div class="row">
+  <select id="voice" aria-label="Voice"></select>
+  <button id="go">Read</button>
+  <button id="stop" class="stop" hidden>Stop</button>
+</div>
+<audio id="player" preload="none"></audio>
+<script>
+const $ = (id) => document.getElementById(id);
+const audio = $("player"), status = $("status");
+let controller = null, objectUrl = null;
+
+async function loadVoices() {
+  try {
+    const r = await fetch("/voices");
+    const d = await r.json();
+    $("voice").innerHTML = d.voices.map(v => `<option${v === d.default ? " selected" : ""}>${v}</option>`).join("");
+    status.textContent = d.voices.length + " voices ready";
+  } catch { status.textContent = "cannot reach service"; }
+}
+
+function setBusy(on) {
+  $("go").hidden = on; $("stop").hidden = !on; $("text").disabled = on;
+}
+
+async function streamToAudio(res) {
+  // iOS Safari has no MediaSource, so play a blob and swap in a longer blob when
+  // playback nears its end. swap() restores currentTime, since setting src resets it.
+  const reader = res.body.getReader();
+  const parts = [];
+  let total = 0, started = false;
+
+  const swap = (resumeAt) => {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(new Blob(parts, { type: "audio/mpeg" }));
+    audio.src = objectUrl;
+    const resume = () => { audio.currentTime = resumeAt; audio.play().catch(() => {}); };
+    if (resumeAt > 0) audio.addEventListener("loadedmetadata", resume, { once: true });
+    else audio.play().catch(() => status.textContent = "tap Read again to start audio");
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value); total += value.byteLength;
+    const runningOut = !audio.paused && audio.duration && audio.duration - audio.currentTime < 2.0;
+    if (!started || runningOut) {
+      swap(audio.currentTime || 0);
+      started = true;
+      status.textContent = "playing…";
+    }
+  }
+
+  // Keep the connection-driven buffer playing until playback finishes.
+  await new Promise((resolve) => {
+    const check = () => {
+      if (audio.paused || audio.ended) return resolve();
+      setTimeout(check, 300);
+    };
+    audio.addEventListener("ended", resolve, { once: true });
+    check();
+  });
+  return total;
+}
+
+async function speak() {
+  const text = $("text").value.trim();
+  if (!text) return;
+  setBusy(true); status.textContent = "connecting…";
+  controller = new AbortController();
+  try {
+    const res = await fetch("/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voice: $("voice").value }),
+      signal: controller.signal,
+    });
+    if (!res.ok) throw new Error((await res.text().catch(() => "")).slice(0, 120) || res.status);
+    if (!res.body) { await playWhole(res); return; }
+    const got = await streamToAudio(res);
+    status.textContent = "done · " + (got / 1024 | 0) + " KB";
+  } catch (e) {
+    if (e.name !== "AbortError") status.textContent = "error: " + e.message;
+  } finally {
+    setBusy(false); controller = null;
+  }
+}
+
+async function playWhole(res) {
+  const buf = await res.arrayBuffer();
+  if (objectUrl) URL.revokeObjectURL(objectUrl);
+  objectUrl = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
+  audio.src = objectUrl;
+  await audio.play().catch(() => status.textContent = "tap Read again to start audio");
+}
+
+$("go").onclick = speak;
+$("stop").onclick = () => {
+  if (controller) controller.abort();
+  audio.pause();
+  audio.removeAttribute("src"); audio.load();
+  if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+  setBusy(false); status.textContent = "stopped";
+};
+audio.addEventListener("ended", () => { setBusy(false); status.textContent = "done"; });
+document.addEventListener("keydown", (e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") speak(); });
+loadVoices();
+</script>
+</body>
+</html>
