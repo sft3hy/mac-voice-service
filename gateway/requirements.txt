@@ -1,5 +1,5 @@
 kokoro==0.9.4
-transformers>=5.17.0
+transformers>=5.19.0
 numpy
 soundfile
 fastapi
